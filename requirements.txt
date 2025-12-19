@@ -10,3 +10,6 @@ torchvision
 Pillow
 tqdm
 streamlit
+joblib
+
+
