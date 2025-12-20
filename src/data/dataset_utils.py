@@ -1,40 +1,41 @@
 from torchvision import datasets, transforms
 import torch
+from src.config import EMNIST_SPLIT
 
-NUM_CLASSES = 47  # EMNIST balanced
-
-
-def _emnist_fix(img):
+def _emnist_fix_orientation(img_tensor: torch.Tensor) -> torch.Tensor:
     """
-    Fix EMNIST orientation (images are rotated/flipped by default)
+    EMNIST images are often rotated/flipped depending on source.
+    This fix is commonly needed for correct visual orientation.
+    img_tensor: shape [1, H, W] after ToTensor()
     """
-    return torch.rot90(img, k=1, dims=[1, 2]).flip(2)
-
+    # rotate 90 degrees then flip horizontally
+    return torch.rot90(img_tensor, k=1, dims=[1, 2]).flip(2)
 
 def get_emnist_datasets(data_dir="data/raw"):
-    """
-    Returns EMNIST Balanced train and test datasets
-    """
-
     transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Lambda(_emnist_fix),
+        transforms.Lambda(_emnist_fix_orientation),
     ])
 
-    train_dataset = datasets.EMNIST(
+    train_ds = datasets.EMNIST(
         root=data_dir,
-        split="balanced",
+        split=EMNIST_SPLIT,
         train=True,
         download=True,
-        transform=transform,
+        transform=transform
     )
 
-    test_dataset = datasets.EMNIST(
+    test_ds = datasets.EMNIST(
         root=data_dir,
-        split="balanced",
+        split=EMNIST_SPLIT,
         train=False,
         download=True,
-        transform=transform,
+        transform=transform
     )
 
-    return train_dataset, test_dataset
+    return train_ds, test_ds
+
+def get_label_list(train_ds) -> list[str]:
+
+    from src.config import LABELS_FALLBACK
+    return LABELS_FALLBACK
