@@ -11,11 +11,22 @@ def _emnist_fix_orientation(img_tensor: torch.Tensor) -> torch.Tensor:
     # rotate 90 degrees then flip horizontally
     return torch.rot90(img_tensor, k=1, dims=[1, 2]).flip(2)
 
-def get_emnist_datasets(data_dir="data/raw"):
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Lambda(_emnist_fix_orientation),
-    ])
+def get_emnist_datasets(data_dir="data/raw", apply_orientation_fix=True):
+    """
+    Get EMNIST datasets.
+    apply_orientation_fix: If True, applies EMNIST orientation fix. 
+                          If False, uses images as-is (for normal orientation).
+    """
+    if apply_orientation_fix:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Lambda(_emnist_fix_orientation),
+        ])
+    else:
+        # No orientation fix - use images in their normal orientation
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+        ])
 
     train_ds = datasets.EMNIST(
         root=data_dir,

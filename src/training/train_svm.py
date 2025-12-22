@@ -3,7 +3,7 @@ import numpy as np
 from joblib import dump
 from sklearn.metrics import accuracy_score, classification_report
 from src.data.dataset_utils import get_emnist_datasets
-from src.models.svm_model import build_svm
+from src.models.svm_mode import build_svm
 
 MODEL_PATH = "models/svm_emnist.joblib"
 
@@ -22,6 +22,22 @@ def main():
     # Flatten for SVM
     X_train = X_train.reshape(len(X_train), -1)
     X_test = X_test.reshape(len(X_test), -1)
+    
+    # Use subset for faster training (SVM can be slow on full dataset)
+    print(f"Full dataset: Train={len(X_train)}, Test={len(X_test)}")
+    print("Using subset for faster training...")
+    train_size = min(10000, len(X_train))  # Use 10k samples
+    test_size = min(2000, len(X_test))     # Use 2k samples
+    
+    indices_train = np.random.choice(len(X_train), train_size, replace=False)
+    indices_test = np.random.choice(len(X_test), test_size, replace=False)
+    
+    X_train = X_train[indices_train]
+    y_train = y_train[indices_train]
+    X_test = X_test[indices_test]
+    y_test = y_test[indices_test]
+    
+    print(f"Training on {len(X_train)} samples, testing on {len(X_test)} samples")
 
     svm = build_svm()
     print("Training SVM...")

@@ -28,8 +28,19 @@ def resize_and_center(char_img: np.ndarray, size: int = IMG_SIZE) -> np.ndarray:
     crop = char_img[y0:y1+1, x0:x1+1]
 
     h, w = crop.shape
+    if h == 0 or w == 0:
+        return np.zeros((size, size), dtype=np.uint8)
+    
     scale = (size - 4) / max(h, w)  # small margin
+    if scale <= 0:
+        return np.zeros((size, size), dtype=np.uint8)
+    
     new_w, new_h = int(w * scale), int(h * scale)
+    
+    # Ensure new dimensions are at least 1
+    new_w = max(1, new_w)
+    new_h = max(1, new_h)
+    
     resized = cv2.resize(crop, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     canvas = np.zeros((size, size), dtype=np.uint8)
@@ -53,17 +64,51 @@ def segment_characters(img: np.ndarray):
     boxes = []
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
-        if w * h < 50:  # ignore tiny noise blobs
+        # Increase minimum size threshold to avoid very small noise
+        if w * h < 100 or w < 5 or h < 5:  # ignore tiny noise blobs
             continue
         boxes.append((x, y, w, h))
 
-    # sort left-to-right
-    boxes.sort(key=lambda b: b[0])
+    if not boxes:
+        return [], th
+    
+    # sort top-to-bottom, then left-to-right
+    # Group by approximate row (allowing some vertical overlap)
+    # Calculate average height for row grouping
+    avg_height = np.mean([h for _, _, _, h in boxes])
+    row_tolerance = avg_height * 0.6  # Characters in same row if y-difference < 60% of avg height
+    
+    # Sort by row (y-coordinate with tolerance), then by x-coordinate
+    def sort_key(box):
+        x, y, w, h = box
+        # Group into rows based on y-coordinate
+        row = int(y / row_tolerance)
+        return (row, x)  # Sort by row first, then by x within row
+    
+    boxes.sort(key=sort_key)
 
     chars = []
     for (x, y, w, h) in boxes:
-        char_crop = th[y:y+h, x:x+w]  # binary (inverted already)
-        char_28 = resize_and_center(char_crop, IMG_SIZE)
-        chars.append((char_28, (x, y, w, h)))
+        try:
+            char_crop = th[y:y+h, x:x+w]  # binary (inverted already)
+            if char_crop.size == 0:
+                continue
+            char_28 = resize_and_center(char_crop, IMG_SIZE)
+            chars.append((char_28, (x, y, w, h)))
+        except Exception as e:
+            # Skip problematic character segments
+            continue
 
     return chars, th
+
+def preprocess_image(img: np.ndarray) -> np.ndarray:
+    """
+    Preprocess a single image for model input.
+    Converts to grayscale, binarizes, resizes/centers, and normalizes to [0, 1].
+    Returns: (28, 28) float array in range [0, 1]
+    """
+    gray = to_grayscale(img)
+    binary = binarize(gray)
+    processed = resize_and_center(binary, IMG_SIZE)
+    # Normalize to [0, 1]
+    return processed.astype(np.float32) / 255.0
