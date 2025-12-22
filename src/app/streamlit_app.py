@@ -160,21 +160,7 @@ def predict_sklearn(model, processed_img, pca=None):
     
     return int(pred), confidence, probs
 
-def apply_emnist_orientation_fix(img_array):
-    """
-    Apply orientation fix to match EMNIST training preprocessing.
-    EMNIST training uses: torch.rot90(img, k=1, dims=[1,2]).flip(2)
-    This is: rotate 90° counter-clockwise, then flip horizontally
-    img_array: numpy array of shape (H, W) or (28, 28)
-    """
-    # Match PyTorch transformation exactly: rotate 90° counter-clockwise, then flip horizontally
-    # This matches what the models were trained with
-    rotated = cv2.rotate(img_array, cv2.ROTATE_90_COUNTERCLOCKWISE)
-    flipped = cv2.flip(rotated, 1)  # 1 = horizontal flip
-    
-    return flipped
-
-def recognize_text_from_image(img, model, model_type):
+def recognize_text_from_image(img, model, model_type, pca=None):
     """Segment image into characters and recognize each one"""
     # Segment characters from image
     chars, processed_img = segment_characters(img)
@@ -186,11 +172,11 @@ def recognize_text_from_image(img, model, model_type):
     details = []
     char_images = []  # For visualization
     
-    # Process each character
+    # Process each character - ensure only 1 character per recognition
     for i, (char_img, bbox) in enumerate(chars):
-        # Don't apply EMNIST orientation fix - user's images are already in normal orientation
-        # The EMNIST fix was needed for EMNIST dataset, but user's handwritten images
-        # are already correctly oriented, so we use them as-is
+        # Dataset is now fixed at source, so no orientation fix needed during inference
+        # User input images are already in normal upright orientation, matching the fixed dataset
+        
         # Normalize character image (it's already 28x28 from segment_characters)
         # Convert to float and normalize to [0, 1] range (matching EMNIST preprocessing)
         # EMNIST uses ToTensor() which normalizes to [0,1], so we match that
@@ -245,7 +231,7 @@ if uploaded_file is not None:
             # Recognize text from image
             try:
                 with st.spinner("Processing image and recognizing characters..."):
-                    recognized_text, details, char_images = recognize_text_from_image(img, model, model_type)
+                    recognized_text, details, char_images = recognize_text_from_image(img, model, model_type, pca)
                 
                 # Display recognized text in textbox
                 st.subheader("Recognized Text")

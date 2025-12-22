@@ -1,102 +1,88 @@
 import os
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-import numpy as np
-from sklearn.metrics import accuracy_score, classification_report
+from torch.utils.data import DataLoader, random_split
+from torch import nn
+from tqdm import tqdm
+
 from src.data.dataset_utils import get_emnist_datasets
 from src.models.cnn_model import SimpleCNN
-from src.config import NUM_CLASSES
 
-MODEL_PATH = "models/cnn_mnist.pth"
-BATCH_SIZE = 64
-EPOCHS = 3  # Reduced for faster training
-LEARNING_RATE = 0.001
-
-def train_epoch(model, train_loader, criterion, optimizer, device):
-    model.train()
-    running_loss = 0.0
-    correct = 0
-    total = 0
-    
-    for images, labels in train_loader:
-        images, labels = images.to(device), labels.to(device)
-        
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-        
-        running_loss += loss.item()
-        _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
-    
-    epoch_loss = running_loss / len(train_loader)
-    epoch_acc = correct / total
-    return epoch_loss, epoch_acc
-
-def evaluate(model, test_loader, device):
-    model.eval()
-    all_preds = []
-    all_labels = []
-    
-    with torch.no_grad():
-        for images, labels in test_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            _, predicted = torch.max(outputs, 1)
-            all_preds.extend(predicted.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-    
-    acc = accuracy_score(all_labels, all_preds)
-    return acc, all_preds, all_labels
+MODEL_PATH = "models/cnn_emnist.pth"
 
 def main():
     os.makedirs("models", exist_ok=True)
-    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    
-    print("Loading EMNIST datasets...")
+
     train_ds, test_ds = get_emnist_datasets()
-    
-    # Use subset for faster training
-    print(f"Full dataset: Train={len(train_ds)}, Test={len(test_ds)}")
-    print("Using subset for faster training...")
-    
-    # Create subset datasets
-    train_indices = torch.randperm(len(train_ds))[:10000]  # Use 10k samples
-    test_indices = torch.randperm(len(test_ds))[:2000]     # Use 2k samples
-    
-    train_subset = torch.utils.data.Subset(train_ds, train_indices)
-    test_subset = torch.utils.data.Subset(test_ds, test_indices)
-    
-    train_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
-    test_loader = DataLoader(test_subset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
-    
-    print(f"Training on {len(train_subset)} samples, testing on {len(test_subset)} samples")
-    
-    model = SimpleCNN(num_classes=NUM_CLASSES).to(device)
+
+    # Validation split (e.g., 10% of train)
+    val_size = int(0.1 * len(train_ds))
+    train_size = len(train_ds) - val_size
+    train_subset, val_subset = random_split(train_ds, [train_size, val_size])
+
+    train_loader = DataLoader(train_subset, batch_size=64, shuffle=True)
+    val_loader = DataLoader(val_subset, batch_size=64, shuffle=False)
+    test_loader = DataLoader(test_ds, batch_size=64, shuffle=False)
+
+    model = SimpleCNN().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    
-    print(f"\nTraining CNN for {EPOCHS} epochs...")
-    for epoch in range(EPOCHS):
-        loss, acc = train_epoch(model, train_loader, criterion, optimizer, device)
-        print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {loss:.4f}, Accuracy: {acc:.4f}")
-    
-    print("\nEvaluating on test set...")
-    test_acc, preds, labels = evaluate(model, test_loader, device)
-    print(f"Test Accuracy: {test_acc:.4f}")
-    print(classification_report(labels, preds, digits=4))
-    
-    # Save model
-    torch.save(model.state_dict(), MODEL_PATH)
-    print(f"\nModel saved to {MODEL_PATH}")
+
+    best_val_acc = 0.0
+    epochs = 8
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        total, correct, loss_sum = 0, 0, 0.0
+
+        for x, y in tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}"):
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad()
+            logits = model(x)
+            loss = criterion(logits, y)
+            loss.backward()
+            optimizer.step()
+
+            loss_sum += loss.item() * x.size(0)
+            preds = logits.argmax(dim=1)
+            correct += (preds == y).sum().item()
+            total += x.size(0)
+
+        train_acc = correct / total
+        train_loss = loss_sum / total
+
+        # Validate
+        model.eval()
+        vtotal, vcorrect = 0, 0
+        with torch.no_grad():
+            for x, y in val_loader:
+                x, y = x.to(device), y.to(device)
+                logits = model(x)
+                preds = logits.argmax(dim=1)
+                vcorrect += (preds == y).sum().item()
+                vtotal += x.size(0)
+
+        val_acc = vcorrect / vtotal
+        print(f"Epoch {epoch}: train_loss={train_loss:.4f} train_acc={train_acc:.4f} val_acc={val_acc:.4f}")
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), MODEL_PATH)
+            print("Saved best:", MODEL_PATH)
+
+    # Test (load best)
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    model.eval()
+    ttotal, tcorrect = 0, 0
+    with torch.no_grad():
+        for x, y in test_loader:
+            x, y = x.to(device), y.to(device)
+            logits = model(x)
+            preds = logits.argmax(dim=1)
+            tcorrect += (preds == y).sum().item()
+            ttotal += x.size(0)
+
+    print("Test Accuracy:", tcorrect / ttotal)
 
 if __name__ == "__main__":
     main()
-

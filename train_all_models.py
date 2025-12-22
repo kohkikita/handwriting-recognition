@@ -34,17 +34,19 @@ print("="*70)
 print("Features: Parallel processing, PCA, HistGradientBoosting, Metal GPU")
 print("="*70)
 
-# Load datasets WITHOUT orientation fix - user's images are in normal orientation
-print("\n[1/6] Loading EMNIST datasets (without orientation fix)...")
+# Load datasets WITH orientation fix applied at source
+# This fixes EMNIST dataset to upright orientation from the start
+# No orientation fix needed during inference since dataset is already upright
+print("\n[1/6] Loading EMNIST datasets (fixing orientation at source to upright)...")
 start_time = time.time()
-train_ds, test_ds = get_emnist_datasets(apply_orientation_fix=False)
+train_ds, test_ds = get_emnist_datasets(apply_orientation_fix=True)
 load_time = time.time() - start_time
 print(f"   ✓ Loaded in {load_time:.1f}s")
 print(f"   Full dataset: Train={len(train_ds)}, Test={len(test_ds)}")
 
-# Use larger subsets for better accuracy
-TRAIN_SIZE = 50000  # Increased for better accuracy
-TEST_SIZE = 10000   # Increased for better evaluation
+# Use maximum data for best accuracy
+TRAIN_SIZE = 112800  # Use full training set for maximum accuracy
+TEST_SIZE = 18800   # Use full test set for better evaluation
 
 # Prepare data for sklearn models
 print(f"\n[2/6] Preparing data ({TRAIN_SIZE} train, {TEST_SIZE} test)...")
@@ -93,10 +95,10 @@ print(f"   Explained variance: {pca.explained_variance_ratio_.sum():.2%}")
 dump(pca, "models/pca_transformer.pkl")
 print("   ✓ Saved PCA transformer: models/pca_transformer.pkl")
 
-# Train LinearSVM (much faster than RBF kernel SVM)
+# Train LinearSVM (optimized for speed and accuracy)
 print("\n[4/6] Training LinearSVM (optimized for M2 Pro)...")
 start_time = time.time()
-svm = LinearSVC(C=10.0, max_iter=5000, random_state=42, dual=False, verbose=1)  # Increased C and iterations for better accuracy
+svm = LinearSVC(C=50.0, max_iter=30000, random_state=42, dual=False, verbose=1, tol=1e-4)  # Balanced C and iterations for speed/accuracy
 svm.fit(X_train_pca, y_train_sklearn)
 train_time = time.time() - start_time
 print(f"   ✓ Training complete in {train_time:.1f}s")
@@ -112,13 +114,12 @@ print("   ✓ Saved: models/svm_emnist.joblib + models/svm_pca.pkl")
 # Train KNearest (already has n_jobs=-1, but use PCA for speed)
 print("\n[5/6] Training KNearest (with parallelization)...")
 start_time = time.time()
-# Use larger subset for better accuracy
-knn_train_size = min(30000, len(X_train_pca))
-knn_train_indices = np.random.choice(len(X_train_pca), knn_train_size, replace=False)
-X_train_knn = X_train_pca[knn_train_indices]
-y_train_knn = y_train_sklearn[knn_train_indices]
+# Use full dataset for maximum accuracy
+knn_train_size = len(X_train_pca)  # Use all training data
+X_train_knn = X_train_pca
+y_train_knn = y_train_sklearn
 
-knn = KNearestModel(n_neighbors=7, weights='distance')  # Increased neighbors for better accuracy
+knn = KNearestModel(n_neighbors=11, weights='distance', metric='minkowski')  # Balanced neighbors for speed/accuracy
 knn.fit(X_train_knn, y_train_knn)
 train_time = time.time() - start_time
 print(f"   ✓ Training complete in {train_time:.1f}s (on {knn_train_size} samples)")
@@ -135,10 +136,11 @@ print("   ✓ Saved: models/knn_model.pkl + models/knn_pca.pkl")
 print("\n[6/7] Training HistGradientBoosting (optimized, multithreaded)...")
 start_time = time.time()
 gb = HistGradientBoostingClassifier(
-    max_iter=200,  # Increased iterations
-    learning_rate=0.05,  # Lower learning rate for better convergence
-    max_depth=15,  # Increased depth
-    min_samples_leaf=5,  # Better regularization
+    max_iter=300,  # Balanced iterations for speed/accuracy
+    learning_rate=0.02,  # Slightly higher learning rate for faster convergence
+    max_depth=20,  # Balanced depth
+    min_samples_leaf=2,  # Better regularization
+    l2_regularization=0.05,  # L2 regularization
     random_state=42,
     verbose=1
 )
@@ -167,8 +169,8 @@ else:
     device = torch.device("cpu")
     print(f"   Using CPU (no GPU acceleration)")
 
-train_subset = Subset(train_ds, train_indices[:30000])  # Use 30k for CNN (better accuracy)
-test_subset = Subset(test_ds, test_indices[:5000])      # Use 5k for CNN
+train_subset = Subset(train_ds, train_indices)  # Use all training data for CNN (maximum accuracy)
+test_subset = Subset(test_ds, test_indices)      # Use all test data for CNN
 
 train_loader = DataLoader(train_subset, batch_size=128, shuffle=True, num_workers=0)
 test_loader = DataLoader(test_subset, batch_size=128, shuffle=False, num_workers=0)
@@ -176,13 +178,15 @@ test_loader = DataLoader(test_subset, batch_size=128, shuffle=False, num_workers
 from src.config import NUM_CLASSES
 model = SimpleCNN(num_classes=NUM_CLASSES).to(device)
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+# Use learning rate scheduler for better convergence
+optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
-# Train for 10 epochs (better accuracy with GPU)
+# Train for 20 epochs (balanced accuracy/speed with GPU)
 print(f"   Training on {len(train_subset)} samples, {len(train_loader)} batches per epoch...")
 model.train()
 start_time = time.time()
-for epoch in range(10):
+for epoch in range(20):
     epoch_start = time.time()
     running_loss = 0.0
     correct = 0
@@ -208,8 +212,10 @@ for epoch in range(10):
             print(f"      Batch {batch_idx + 1}/{len(train_loader)} - Loss: {running_loss/batch_count:.4f}, Acc: {current_acc:.4f}", end='\r')
     
     train_acc = correct / total
+    avg_loss = running_loss / len(train_loader)
     epoch_time = time.time() - epoch_start
-    print(f"   Epoch {epoch+1}/10 - Loss: {running_loss/len(train_loader):.4f}, Acc: {train_acc:.4f} ({epoch_time:.1f}s)")
+    scheduler.step(avg_loss)  # Update learning rate based on loss
+    print(f"   Epoch {epoch+1}/20 - Loss: {avg_loss:.4f}, Acc: {train_acc:.4f} ({epoch_time:.1f}s)")
 
 train_time = time.time() - start_time
 print(f"   ✓ Training complete in {train_time:.1f}s")

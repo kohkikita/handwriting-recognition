@@ -1,5 +1,3 @@
-# src/data/preprocessing.py
-
 import cv2
 import numpy as np
 from src.config import IMG_SIZE
@@ -51,7 +49,8 @@ def resize_and_center(char_img: np.ndarray, size: int = IMG_SIZE) -> np.ndarray:
 
 def segment_characters(img: np.ndarray):
     """
-    Returns list of (char_img_28x28, bbox) sorted left->right.
+    Returns list of (char_img_28x28, bbox) sorted left->right, top->bottom.
+    Each character is isolated and resized to 28x28 for recognition.
     bbox = (x, y, w, h) in original image coords.
     """
     gray = to_grayscale(img)
@@ -65,7 +64,17 @@ def segment_characters(img: np.ndarray):
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
         # Increase minimum size threshold to avoid very small noise
+        # Also ensure reasonable aspect ratio to avoid merging multiple characters
+        aspect_ratio = max(w, h) / max(min(w, h), 1)
         if w * h < 100 or w < 5 or h < 5:  # ignore tiny noise blobs
+            continue
+        # Filter out boxes that are too wide (likely multiple characters merged)
+        # Typical single character aspect ratio is < 2.5
+        if aspect_ratio > 2.5:
+            # Try to split wide boxes - this helps isolate individual characters
+            # If a box is too wide, it might contain multiple characters
+            # For now, we'll skip it and let the user provide better-segmented images
+            # Or we could try to split it, but that's complex
             continue
         boxes.append((x, y, w, h))
 
